@@ -7,8 +7,8 @@ from io import BytesIO
 import google.generativeai as genai
 import importlib.metadata
 from docx import Document
-from fpdf import FPDF # PDF oluşturmak için gerekli
-import urllib.parse # WhatsApp linki için
+from fpdf import FPDF
+import urllib.parse
 
 # --- Sayfa Ayarları ---
 st.set_page_config(
@@ -107,14 +107,19 @@ def create_udf_file(text):
     return byte_io
 
 def create_pdf_file(text):
-    # Standart FPDF Türkçe karakterleri desteklemez, bu yüzden karakter değişimi yapıyoruz
-    # (Harici font dosyası yüklememek için basit çözüm)
-    tr_map = {
-        ord('ğ'):'g', ord('Ğ'):'G', ord('ş'):'s', ord('Ş'):'S', 
-        ord('ı'):'i', ord('İ'):'I', ord('ç'):'c', ord('Ç'):'C', 
-        ord('ü'):'u', ord('Ü'):'U', ord('ö'):'o', ord('Ö'):'O'
+    # FPDF Türkçe karakter ve Unicode hatasını önlemek için temizleme işlemi
+    # 1. Türkçe karakterleri İngilizce karşılıklarına çevir
+    replacements = {
+        'ğ': 'g', 'Ğ': 'G', 'ş': 's', 'Ş': 'S', 'ı': 'i', 'İ': 'I',
+        'ç': 'c', 'Ç': 'C', 'ü': 'u', 'Ü': 'U', 'ö': 'o', 'Ö': 'O',
+        '“': '"', '”': '"', '’': "'", '–': '-', '…': '...'
     }
-    clean_text = text.translate(tr_map)
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    
+    # 2. Desteklenmeyen diğer tüm karakterleri (emoji vb.) temizle
+    # Latin-1'e çevir, hataları '?' yap, sonra tekrar string'e çevir
+    text = text.encode('latin-1', 'replace').decode('latin-1')
     
     pdf = FPDF()
     pdf.add_page()
@@ -127,9 +132,10 @@ def create_pdf_file(text):
     
     # İçerik
     pdf.set_font("Arial", size=11)
-    pdf.multi_cell(0, 10, clean_text)
+    pdf.multi_cell(0, 10, text)
     
-    return pdf.output(dest='S').encode('latin-1')
+    # Çıktıyı güvenli bir şekilde byte olarak döndür
+    return pdf.output(dest='S').encode('latin-1', 'ignore')
 
 # --- AKILLI AI MOTORU ---
 def get_ai_response(prompt, api_key):
@@ -165,7 +171,7 @@ def get_ai_response(prompt, api_key):
 
 # --- ANA UYGULAMA ---
 def main():
-    st.title("⚖️ Hukuk Asistanı (v3.2)")
+    st.title("⚖️ Hukuk Asistanı (v3.3)")
     
     try:
         lib_ver = importlib.metadata.version("google-generativeai")
@@ -179,7 +185,6 @@ def main():
     if "mevzuat_sonuc" not in st.session_state: st.session_state.mevzuat_sonuc = ""
     if "ictihat_sonuc" not in st.session_state: st.session_state.ictihat_sonuc = ""
     if "dilekce_taslak" not in st.session_state: st.session_state.dilekce_taslak = ""
-    # YENİ: Bana Sor cevap state'i
     if "soru_cevap" not in st.session_state: st.session_state.soru_cevap = ""
 
     with st.sidebar:
@@ -218,7 +223,7 @@ def main():
     
     auto_data = extract_metadata(st.session_state.doc_text)
 
-    # --- SEKMELER (6. SEKME EKLENDİ) ---
+    # --- SEKMELER ---
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📋 Analiz", "💬 Sohbet", "📕 Mevzuat", "⚖️ İçtihat", "✍️ Dilekçe Yaz", "❓ Bana Sor"])
 
     with tab1:
@@ -307,7 +312,7 @@ def main():
                     st.download_button("💾 UDF Olarak İndir (.udf)", udf_file, "Dilekce.udf", "application/zip")
                 st.text_area("Dilekçe Metni", st.session_state.dilekce_taslak, height=500)
 
-    # --- YENİ EKLENEN 6. SEKME: BANA SOR ---
+    # --- 6. SEKME: BANA SOR (WhatsApp + PDF) ---
     with tab6:
         st.subheader("❓ Hukuki Soru & WhatsApp Paylaşımı")
         st.info("Sorduğunuz soruyu hem Mevzuat hem de Yargıtay İçtihatları ile analiz edip cevaplar.")
@@ -341,16 +346,14 @@ def main():
                         res = get_ai_response(prompt, api_key)
                         st.session_state.soru_cevap = res
 
-        # Sonuç Ekranı
         if st.session_state.soru_cevap:
             st.divider()
             st.markdown(f"<div class='ictihat-kutusu'><b>💡 Hukuki Görüş:</b><br>{st.session_state.soru_cevap}</div>", unsafe_allow_html=True)
             
-            # PDF Oluştur
+            # PDF Oluştur (Hata düzeltildi)
             pdf_data = create_pdf_file(st.session_state.soru_cevap)
             
-            # WhatsApp Linki Oluştur (Metin Paylaşımı)
-            # Not: WhatsApp Web API dosya yüklemeye izin vermez, sadece metin gönderir.
+            # WhatsApp Linki
             encoded_text = urllib.parse.quote(f"*Hukuki Soru:* {kullanici_sorusu}\n\n*Cevap:*\n{st.session_state.soru_cevap}")
             wa_link = f"https://wa.me/{telefon_no}?text={encoded_text}"
             
